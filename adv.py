@@ -177,13 +177,16 @@ else:
     else:
         col_srv, col_db = st.columns(2)
         with col_srv:
-            server = st.text_input("Server", placeholder="Give Your Server Name")
+            server = st.text_input("Server", placeholder="Give Your Server Name or host", help="Use host or host\\instance format.")
         with col_db:
-            database = st.text_input("Database", placeholder="my_database_name")
-            
+            port = st.text_input("Port (optional)", placeholder="1433", help="Leave blank to use the default SQL Server port.")
+
+        database = st.text_input("Database", placeholder="my_database_name")
         auth_type = "Database Authentication"
         if db_type == "SQL Server (MS SQL)":
             auth_type = st.radio("Authentication Method", ["Windows Authentication", "Database Authentication"], horizontal=True)
+            if auth_type == "Windows Authentication":
+                st.info("Windows Authentication may not work from cloud hosts. Use Database Authentication when deploying on Streamlit Cloud or Linux.")
 
         username = ""
         password = ""
@@ -196,33 +199,37 @@ else:
 
         if server and database:
             from urllib import parse as urllib_parse
-            
+            connection_server = server
+            if port:
+                connection_server = f"{server},{port}"
+
             if db_type == "PostgreSQL":
                 db_uri = f"postgresql://{username}:{password}@{server}/{database}"
-                
+
             elif db_type == "MySQL":
                 db_uri = f"mysql+pymysql://{username}:{password}@{server}/{database}"
-                
+
             elif db_type == "SQL Server (MS SQL)":
                 if auth_type == "Windows Authentication":
                     params = urllib_parse.quote_plus(
                         f"DRIVER={{ODBC Driver 17 for SQL Server}};"
-                        f"SERVER={server};"
+                        f"SERVER={connection_server};"
                         f"DATABASE={database};"
                         f"Trusted_Connection=yes;"
                         f"TrustServerCertificate=yes;"
+                        f"Connect Timeout=15;"
                     )
-                    db_uri = f"mssql+pyodbc:///?odbc_connect={params}"
                 else:
                     params = urllib_parse.quote_plus(
                         f"DRIVER={{ODBC Driver 17 for SQL Server}};"
-                        f"SERVER={server};"
+                        f"SERVER={connection_server};"
                         f"DATABASE={database};"
                         f"UID={username};"
                         f"PWD={password};"
                         f"TrustServerCertificate=yes;"
+                        f"Connect Timeout=15;"
                     )
-                    db_uri = f"mssql+pyodbc:///?odbc_connect={params}"
+                db_uri = f"mssql+pyodbc:///?odbc_connect={params}"
 
     # --- CONNECTION LOGIC ---
     col_btn = st.columns([3, 1])

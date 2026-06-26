@@ -1,0 +1,11 @@
+streamlit
+pandas
+requests
+charset-normalizer
+SQLAlchemy
+plotly
+wordcloud
+matplotlib
+openpyxl
+pyarrow
+sqlalchemy-utils

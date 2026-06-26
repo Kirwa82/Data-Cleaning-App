@@ -3,6 +3,11 @@ import pandas as pd
 import io
 import requests
 from charset_normalizer import detect
+from sqlalchemy import create_engine, inspect
+import plotly.express as px
+from wordcloud import WordCloud
+WORDCLOUD_AVAILABLE = True
+import matplotlib.pyplot as plt
 
 # ==============================================================================
 # WEB USER INTERFACE (STREAMLIT APP RENDER)
@@ -15,6 +20,8 @@ st.markdown("#### Build a modular data cleaning pipeline. **Your data remains co
 # Initialize session state tracking
 if 'kobo_df' not in st.session_state:
     st.session_state['kobo_df'] = None
+if 'db_df' not in st.session_state:
+    st.session_state['db_df'] = None
 if 'data_source' not in st.session_state:
     st.session_state['data_source'] = None
 if 'all_uploaded_tables' not in st.session_state:
@@ -38,7 +45,7 @@ def make_hashable(df):
 # --- DATA SOURCE SELECTION ---
 data_source = st.radio(
     "Choose your data source:", 
-    ["File Upload", "KoboToolbox"], 
+    ["File Upload", "KoboToolbox", "SQL Database"], 
     horizontal=True,
     key='data_source_radio'
 )
@@ -55,8 +62,12 @@ if st.session_state['data_source'] != data_source:
     st.session_state['data_source'] = data_source
     st.session_state['all_uploaded_tables'] = None
     st.session_state['kobo_df'] = None
+    st.session_state['db_df'] = None
     st.session_state['selected_sheet'] = None
 
+# ==========================================
+# SOURCE 1: FILE UPLOAD
+# ==========================================
 if data_source == "File Upload":
     uploaded_file = st.file_uploader(
         "Choose a file", 
@@ -74,17 +85,14 @@ if data_source == "File Upload":
                     detection = detect(raw_preview)
                     encoding_guess = detection["encoding"] or "utf-8"
                     uploaded_file.seek(0)
-                    # CSVs are inherently single table
                     single_df = pd.read_csv(uploaded_file, encoding=encoding_guess)
                     st.session_state['all_uploaded_tables'] = {"CSV_Data": single_df}
                 
                 elif file_extension == "parquet":
-                    # Parquet files are inherently single table
                     single_df = pd.read_parquet(uploaded_file)
                     st.session_state['all_uploaded_tables'] = {"Parquet_Data": single_df}
                 
                 elif file_extension == "xlsx":
-                    # MULTI-TABLE SUPPORT: Read all sheets as a dictionary of DataFrames
                     st.session_state['all_uploaded_tables'] = pd.read_excel(uploaded_file, sheet_name=None)
                 
                 if st.session_state['all_uploaded_tables']:
@@ -96,7 +104,6 @@ if data_source == "File Upload":
             st.error(f"❌ Error reading file: {e}")
             st.session_state['all_uploaded_tables'] = None
 
-    # UI element to toggle active table sheet if multiple exist
     if st.session_state['all_uploaded_tables'] is not None:
         available_sheets = list(st.session_state['all_uploaded_tables'].keys())
         selected_sheet = st.selectbox("🎯 Select which sheet/table to clean:", options=available_sheets, key="sheet_selector")
@@ -106,7 +113,10 @@ if data_source == "File Upload":
         if not output_filename.endswith(".csv"):
             output_filename = output_filename.split(".")[0] + ".csv"
 
-else:
+# ==========================================
+# SOURCE 2: KOBOTOOLBOX
+# ==========================================
+elif data_source == "KoboToolbox":
     st.markdown("### 🔑 KoboToolbox Configuration")
     col1, col2 = st.columns(2)
     with col1:
@@ -148,6 +158,116 @@ else:
         df = st.session_state['kobo_df']
         output_filename = f"cleaned_kobo_{form_uid}.csv"
 
+# ===========================================
+# SOURCE 3: SQL DATABASE
+# ===========================================
+else:
+    st.markdown("### 🗄️ SQL Database Connection")
+    
+    db_type = st.selectbox(
+        "Database System Type", 
+        ["SQLite", "PostgreSQL", "MySQL", "SQL Server (MS SQL)"]
+    )
+    db_uri = None
+    
+    if db_type == "SQLite":
+        db_path = st.text_input("Database File Path", placeholder="example.db", help="Use ':memory:' for an in-memory testing DB.")
+        if db_path:
+            db_uri = f"sqlite:///{db_path}" if db_path != ":memory:" else "sqlite:///:memory:"
+    else:
+        col_srv, col_db = st.columns(2)
+        with col_srv:
+            server = st.text_input("Server", placeholder="Give Your Server Name")
+        with col_db:
+            database = st.text_input("Database", placeholder="my_database_name")
+            
+        auth_type = "Database Authentication"
+        if db_type == "SQL Server (MS SQL)":
+            auth_type = st.radio("Authentication Method", ["Windows Authentication", "Database Authentication"], horizontal=True)
+
+        username = ""
+        password = ""
+        if auth_type == "Database Authentication":
+            col_usr, col_pwd = st.columns(2)
+            with col_usr:
+                username = st.text_input("Username")
+            with col_pwd:
+                password = st.text_input("Password", type="password")
+
+        if server and database:
+            from urllib import parse as urllib_parse
+            
+            if db_type == "PostgreSQL":
+                db_uri = f"postgresql://{username}:{password}@{server}/{database}"
+                
+            elif db_type == "MySQL":
+                db_uri = f"mysql+pymysql://{username}:{password}@{server}/{database}"
+                
+            elif db_type == "SQL Server (MS SQL)":
+                if auth_type == "Windows Authentication":
+                    params = urllib_parse.quote_plus(
+                        f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+                        f"SERVER={server};"
+                        f"DATABASE={database};"
+                        f"Trusted_Connection=yes;"
+                        f"TrustServerCertificate=yes;"
+                    )
+                    db_uri = f"mssql+pyodbc:///?odbc_connect={params}"
+                else:
+                    params = urllib_parse.quote_plus(
+                        f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+                        f"SERVER={server};"
+                        f"DATABASE={database};"
+                        f"UID={username};"
+                        f"PWD={password};"
+                        f"TrustServerCertificate=yes;"
+                    )
+                    db_uri = f"mssql+pyodbc:///?odbc_connect={params}"
+
+    # --- CONNECTION LOGIC ---
+    col_btn = st.columns([3, 1])
+    with col_btn[1]:
+        st.markdown("<br>", unsafe_allow_html=True)
+        connect_db = st.button("🔌 Connect", type="secondary", use_container_width=True)
+        
+    if db_uri and (connect_db or st.session_state.get('db_tables') is not None):
+        try:
+            engine = create_engine(db_uri)
+            inspector = inspect(engine)
+            tables = inspector.get_table_names()
+            st.session_state['db_tables'] = tables
+            st.session_state['db_engine_uri'] = db_uri
+        except Exception as e:
+            st.error(f"❌ Connection failed: Please check your credentials or server status.\n\nDetails: {e}")
+            st.session_state['db_tables'] = None
+
+    # --- NAVIGATOR / TABLE SELECTOR ---
+    if st.session_state.get('db_tables'):
+        st.success("✅ Connected successfully!")
+        
+        col3, col4 = st.columns([3, 1])
+        with col3:
+            selected_db_table = st.selectbox("🎯 Select Table (Navigator):", options=st.session_state['db_tables'])
+        with col4:
+            st.markdown("<br>", unsafe_allow_html=True)
+            fetch_db_data = st.button("📥 Load Data", type="primary", use_container_width=True)
+            
+        if fetch_db_data:
+            try:
+                engine = create_engine(st.session_state['db_engine_uri'])
+                with st.spinner(f"Loading `{selected_db_table}` into data model..."):
+                    st.session_state['db_df'] = pd.read_sql_table(selected_db_table, con=engine)
+                    st.session_state['active_db_table_name'] = selected_db_table
+                    st.success(f"✅ Loaded {len(st.session_state['db_df']):,} rows!")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"❌ Failed to load table: {e}")
+
+    if st.session_state.get('db_df') is not None:
+        df = st.session_state['db_df']
+        t_name = st.session_state.get('active_db_table_name', 'db_table')
+        output_filename = f"cleaned_db_{t_name}.csv"
+
 # --- CORE TRANSFORMATION & PIPELINE ENGINE ---
 if df is not None:
     st.markdown("---")
@@ -169,7 +289,7 @@ if df is not None:
     cleaned_df = df.copy()
     all_columns = df.columns.tolist()
     
-    # 1. PROCESS: SHAPE
+    # 1. Describing the data
     if show_shape:
         st.write("### Data Dimensions (Shape)")
         col1, col2, col3, col4 = st.columns(4)
@@ -183,21 +303,16 @@ if df is not None:
             duplicate_rows = "N/A"
         col4.metric("Duplicate Rows", f"{duplicate_rows:,}")
 
-    # 2. INTERACTIVE CONFIGURATIONS
+    # 2. Dropping Columns
     columns_to_drop = []
     if do_drop_cols:
         st.write("### ✂️ Select Columns to Remove")
-        # Do not preselect any columns by default
-        columns_to_drop = st.multiselect(
-            "Select columns to REMOVE:",
-            options=all_columns,
-            default=[],
-            key=f"dropper_{st.session_state.get('sheet_selector', 'default')}"
-        )
+        columns_to_drop = st.multiselect("Select columns to REMOVE:", options=all_columns, key=f"dropper_{st.session_state.get('sheet_selector', 'default')}")
         cleaned_df = cleaned_df.drop(columns=[c for c in columns_to_drop if c in cleaned_df.columns])
 
     remaining_cols_after_drop = [c for c in all_columns if c not in columns_to_drop]
 
+    # 3. Renaming Columns
     columns_to_rename = {}
     if do_rename_cols and remaining_cols_after_drop:
         st.write("### ✏️ Rename Columns")
@@ -209,21 +324,39 @@ if df is not None:
                     columns_to_rename[col] = new_name
         cleaned_df = cleaned_df.rename(columns=columns_to_rename)
 
+    # 4. Dealing with Data types
     type_mapping_dict = {}
     if do_data_types and remaining_cols_after_drop:
-        st.write("### 🔡 Deal with Data Types")
-        with st.expander("Modify Column Field Class Types", expanded=False):
+        st.write("###  Deal with Data Types")
+        with st.expander("Deal with Data Types", expanded=False):
             t_cols = st.columns(3)
             for idx, col in enumerate(remaining_cols_after_drop):
                 cur_name = columns_to_rename.get(col, col)
                 if cur_name in cleaned_df.columns:
                     original_dtype = str(cleaned_df[cur_name].dtype)
-                    type_options = [f"Original ({original_dtype})", "String", "Integer", "Float", "DateTime", "Boolean"]
+                    type_options = [f"({original_dtype})", "String", "Integer", "Float", "DateTime", "Boolean"]
+                    
+                    # --- AUTOMATIC NUMBER DETECTION LOGIC ---
+                    is_numeric = False
+                    if "int" in original_dtype or "float" in original_dtype:
+                        is_numeric = True
+                    else:
+                        non_null_samples = cleaned_df[cur_name].dropna().head(100)
+                        if not non_null_samples.empty:
+                            converted = pd.to_numeric(non_null_samples, errors='coerce')
+                            if converted.notnull().sum() / len(non_null_samples) > 0.5:
+                                is_numeric = True
+                    
+                    default_idx = 2 if is_numeric else 0
+                    # ----------------------------------------
+
                     chosen_type = t_cols[idx % 3].selectbox(
                         f"Type for `{cur_name}` (original: {original_dtype}):", 
                         type_options,
+                        index=default_idx,
                         key=f"type_{st.session_state.get('sheet_selector', 'default')}_{col}"
                     )
+                    
                     if chosen_type != type_options[0]:
                         type_mapping_dict[cur_name] = chosen_type
                         try:
@@ -240,7 +373,7 @@ if df is not None:
                         except Exception as e:
                             st.warning(f"Failed casting `{cur_name}` to {chosen_type}: {e}")
 
-    # Automatically remove duplicate rows for every pipeline run
+    # 5. Automatic Removal of Duplicates
     try:
         before_rows = cleaned_df.shape[0]
         cleaned_df = cleaned_df[~make_hashable(cleaned_df).duplicated()].reset_index(drop=True)
@@ -250,11 +383,12 @@ if df is not None:
     except:
         pass
 
+    # 6. Handling Missing Values
     na_strategy = "None"
     na_selected_cols = []
     if do_missing_values and remaining_cols_after_drop:
-        st.write("### 🩹 Handle Missing Values")
-        with st.expander("Configure Null/NA Imputation Strategies", expanded=False):
+        st.write("### 🩹 Handling Missing Values")
+        with st.expander("Dealing With Null Values", expanded=False):
             m_col1, m_col2 = st.columns(2)
             na_strategy = m_col1.selectbox(
                 "Choose Strategy:", 
@@ -263,13 +397,7 @@ if df is not None:
             )
             current_working_cols = [columns_to_rename.get(c, c) for c in remaining_cols_after_drop]
             current_working_cols = [c for c in current_working_cols if c in cleaned_df.columns]
-            # Do not auto-select all columns by default for NA imputation
-            na_selected_cols = m_col2.multiselect(
-                "Apply to Specific Columns:",
-                options=current_working_cols,
-                default=[],
-                key=f"na_sel_{st.session_state.get('sheet_selector', 'default')}"
-            )
+            na_selected_cols = m_col2.multiselect("Apply to Specific Columns:", options=current_working_cols, default=current_working_cols, key=f"na_sel_{st.session_state.get('sheet_selector', 'default')}")
             
             if na_selected_cols:
                 for col in na_selected_cols:
@@ -297,20 +425,148 @@ if df is not None:
                             mode_res = cleaned_df[col].mode()
                             cleaned_df[col] = cleaned_df[col].fillna(mode_res[0] if not mode_res.empty else "")
 
+    # 7. Summary Statistics
     if show_describe:
         st.write("### 📊 Summary Statistics")
-        st.dataframe(cleaned_df.describe().astype(str).fillna("-"), width='stretch')
+        st.dataframe(cleaned_df.describe(), width='stretch')
 
     # Output Data Preview Panels
     st.write("### Preview Of Your Data")
     st.dataframe(cleaned_df.head(15), width='stretch')
-    st.markdown("---")
 
     # =====================================================
-    # LIVE POWER BI DIRECT PYTHON INTEGRATION
+    # INTERACTIVE VISUALIZATION WITH PLOTLY
     # =====================================================
-    st.write("### 📊 Import Directly to Power BI")
+    st.markdown("---")
+    st.write("### 📊 Interactive Data Visualization Suite")
+
+    numeric_cols = cleaned_df.select_dtypes(include=['number']).columns.tolist()
+    categorical_cols = cleaned_df.select_dtypes(include=['object', 'category', 'string']).columns.tolist()
+    all_viz_cols = cleaned_df.columns.tolist()
+
+    agg_map = {"Average": "mean", "Sum": "sum", "Median": "median", "Max": "max", "Min": "min", "Count": "count"}
+
+    viz_type = st.selectbox(
+        "Choose Chart Type:",
+        ["Bar Chart", "Pie Chart", "Line Chart", "Word Cloud"]
+    )
+
+    with st.expander(f"Configure {viz_type} Parameters", expanded=True):
+        fig = None
+
+        # --- BAR CHART ---
+        if viz_type == "Bar Chart":
+            if not categorical_cols:
+                st.info("💡 Need at least one categorical column to anchor bars.")
+            else:
+                v_col1, v_col2 = st.columns(2)
+                x_axis = v_col1.selectbox("X Axis (Category):", options=categorical_cols, key="bar_x")
+                y_axis = v_col2.selectbox("Y Axis (Value):", options=["Row Count"] + numeric_cols, key="bar_y")
+
+                if y_axis == "Row Count":
+                    bar_data = cleaned_df[x_axis].value_counts().reset_index()
+                    bar_data.columns = [x_axis, "Row Count"]
+                    fig = px.bar(bar_data, x=x_axis, y="Row Count", title=f"Distribution of {x_axis}", template="plotly_white")
+                else:
+                    agg_func = st.radio(
+                        "Aggregation:",
+                        ["Average", "Sum", "Median", "Max", "Min"],
+                        horizontal=True,
+                        key="bar_agg"
+                    )
+                    bar_data = cleaned_df.groupby([x_axis], as_index=False)[y_axis].agg(agg_map[agg_func])
+                    fig = px.bar(
+                        bar_data, x=x_axis, y=y_axis,
+                        title=f"{agg_func} {y_axis} by {x_axis}"
+                    )
+
+        # --- PIE CHART ---
+        elif viz_type == "Pie Chart":
+            if not categorical_cols:
+                st.info("💡 Need at least one categorical column to construct segments.")
+            else:
+                v_col1, v_col2 = st.columns(2)
+                names_col = v_col1.selectbox("Slices (Category Column):", options=categorical_cols, key="pie_names")
+                values_col = v_col2.selectbox("Slice Proportions (Numeric Column):", options=["Row Count Summary"] + numeric_cols, key="pie_values")
+
+                if values_col == "Row Count Summary":
+                    pie_data = cleaned_df[names_col].value_counts().reset_index()
+                    pie_data.columns = [names_col, "Count"]
+                    fig = px.pie(pie_data, names=names_col, values="Count", title=f"Proportional Breakdown of {names_col}")
+                else:
+                    agg_func = st.radio(
+                        "Aggregation:",
+                        ["Sum", "Average", "Median", "Max", "Min"],
+                        horizontal=True,
+                        key="pie_agg"
+                    )
+                    pie_data = cleaned_df.groupby(names_col, as_index=False)[values_col].agg(agg_map[agg_func])
+                    fig = px.pie(
+                        pie_data, names=names_col, values=values_col,
+                        title=f"{agg_func} {values_col} across {names_col}"
+                    )
+
+        # --- LINE CHART ---
+        elif viz_type == "Line Chart":
+            if not all_viz_cols or not numeric_cols:
+                st.info(" Need at least one numeric column to chart.")
+            else:
+                v_col1, v_col2 = st.columns(2)
+                x_axis = v_col1.selectbox("X Axis (Timeline/Index):", options=all_viz_cols, key="line_x")
+                y_axis = v_col2.selectbox("Y Axis (Numeric Value):", options=numeric_cols, key="line_y")
+
+                if y_axis:
+                    agg_func = st.radio(
+                        "Aggregation:",
+                        ["Average", "Sum", "Median", "Max", "Min"],
+                        horizontal=True,
+                        key="line_agg"
+                    )
+                    line_data = (
+                        cleaned_df.groupby([x_axis], as_index=False)[y_axis]
+                        .agg(agg_map[agg_func])
+                        .sort_values(x_axis)
+                    )
+                    fig = px.line(
+                        line_data, x=x_axis, y=y_axis,
+                        title=f"{agg_func} {y_axis} Trend over {x_axis}", template="plotly_white"
+                    )
+        ##--Word Cloud--
+        elif viz_type == "Word Cloud":
+            if not WORDCLOUD_AVAILABLE:
+                st.warning("The optional `wordcloud` package is not installed. Install it to enable Word Cloud visualization.")
+            elif not categorical_cols:
+                st.info("We need at least one text/categorical values to generate a Wordcloud")
+            else:
+                v_col1, v_col2 = st.columns(2)
+                text_col = v_col1.selectbox("Select the text column", options=categorical_cols, key="wc_text")
+                bg_color = v_col2.selectbox("Background colors", options=['Black', 'White'], key="wc_bg")
+                text_data = " ".join(cleaned_df[text_col].dropna().astype(str))
+                if not text_data.strip():
+                    st.warning("Selected column has no text data to generate a cloud")
+                else:
+                    with st.spinner("Generating wordcloud..."):
+                        wordcloud = WordCloud(
+                            width=800,
+                            height=400,
+                            background_color=bg_color.lower(),
+                            collocations=False
+                        ).generate(text_data)
+
+                        fig, ax = plt.subplots(figsize=(10, 5))
+                        ax.imshow(wordcloud, interpolation='bilinear')
+                        ax.axis("off")
+                        plt.tight_layout(pad=0)
+                        st.pyplot(fig)
+
+    if fig is not None and viz_type != "Word Cloud":
+        st.plotly_chart(fig, use_container_width=True)
+
+    # =============================
+    # LIVE POWER BI PYTHON SCRIPT
+    # =============================
     if data_source == "KoboToolbox" and form_uid and api_token:
+        st.write("### 📊 Import Directly to Power BI")
         pbi_script = f"""import requests
 import pandas as pd
 import numpy as np
@@ -367,7 +623,7 @@ df = pd.json_normalize(results)
         st.markdown("> Copy the Python script block below. Power BI will execute this cleanly without showing `df_safe` artifacts.")
         st.code(pbi_script, language="python")
     else:
-        st.warning("⚠️ Power BI live script configurations are only active during structural KoboToolbox data cloud feeds.")
+        pass
 
     st.markdown("---")
 
@@ -387,4 +643,4 @@ df = pd.json_normalize(results)
     except Exception as e:
         st.error(f"❌ Error generating payload binary package: {str(e)}")
 else:
-    st.info("👆 Please upload a data asset source file or feed active KoboToolbox keys to compute operational fields.")
+    st.info("👆 Please upload a data asset source file, pass active KoboToolbox keys, or stream from a SQL Database engine to compute operational fields.")

@@ -9,3 +9,4 @@ matplotlib
 openpyxl
 pyarrow
 sqlalchemy-utils
+pyodbc

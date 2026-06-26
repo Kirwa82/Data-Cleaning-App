@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 st.set_page_config(page_title="Custom Data Cleaning Pipeline", layout="wide", page_icon="🧼")
 
 st.title("🧼 Custom Data Cleaning Pipeline")
-st.markdown("#### Build a modular data cleaning pipeline. **Your data remains completely in RAM and is never saved to a disk.**")
+st.markdown("#### This is a modular data cleaning pipeline. **Your data remains completely in RAM and is never saved to a disk.**")
 
 # Initialize session state tracking
 if 'kobo_df' not in st.session_state:

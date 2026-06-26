@@ -30,5 +30,5 @@ A modular, interactive web application for cleaning and transforming data with a
 
 ### Prerequisites
 
-- Python 3.7 or higher
+- Python 3 or higher
 - pip (Python package installer)

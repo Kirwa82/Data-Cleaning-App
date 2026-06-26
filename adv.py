@@ -235,7 +235,7 @@ else:
     col_btn = st.columns([3, 1])
     with col_btn[1]:
         st.markdown("<br>", unsafe_allow_html=True)
-        connect_db = st.button("🔌 Connect", type="secondary", use_container_width=True)
+        connect_db = st.button("🔌 Connect", type="secondary", width="stretch")
         
     if db_uri and (connect_db or st.session_state.get('db_tables') is not None):
         try:
@@ -257,7 +257,7 @@ else:
             selected_db_table = st.selectbox("🎯 Select Table (Navigator):", options=st.session_state['db_tables'])
         with col4:
             st.markdown("<br>", unsafe_allow_html=True)
-            fetch_db_data = st.button("📥 Load Data", type="primary", use_container_width=True)
+            fetch_db_data = st.button("📥 Load Data", type="primary", width="stretch")
             
         if fetch_db_data:
             try:
@@ -567,7 +567,7 @@ if df is not None:
                         st.pyplot(fig)
 
     if fig is not None and viz_type != "Word Cloud":
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     # =============================
     # LIVE POWER BI PYTHON SCRIPT

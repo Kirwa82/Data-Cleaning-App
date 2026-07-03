@@ -3,6 +3,7 @@ import pandas as pd
 import io
 import requests
 from charset_normalizer import detect
+from urllib.parse import urljoin
 from sqlalchemy import create_engine, inspect
 import plotly.express as px
 from wordcloud import WordCloud
@@ -41,6 +42,36 @@ def make_hashable(df):
                     lambda x: str(x) if isinstance(x, (list, dict, set)) else x
                 )
     return df_safe
+
+
+def fetch_all_kobo_submissions(kobo_server, form_uid, api_token, request_timeout=30, page_limit=1000):
+    headers = {"Authorization": f"Token {api_token}"}
+    results = []
+    page_count = 0
+    url = f"{kobo_server}/api/v2/assets/{form_uid}/data.json"
+    params = {"limit": page_limit}
+
+    while url:
+        page_count += 1
+        response = requests.get(url, headers=headers, params=params, timeout=request_timeout)
+        if response.status_code != 200:
+            raise ValueError(f"API Error {response.status_code}: {response.text}")
+
+        payload = response.json()
+        batch = payload.get("results", [])
+        results.extend(batch)
+
+        next_url = payload.get("next")
+        if not next_url:
+            break
+
+        if next_url.startswith("/"):
+            url = urljoin(kobo_server.rstrip("/") + "/", next_url.lstrip("/"))
+        else:
+            url = next_url
+        params = None
+
+    return results, page_count
 
 # --- DATA SOURCE SELECTION ---
 data_source = st.radio(
@@ -135,22 +166,16 @@ elif data_source == "KoboToolbox":
         if not form_uid or not api_token:
             st.error("⚠️ Please enter both your Form UID and API Token.")
         else:
-            kobo_url = f"{kobo_server}/api/v2/assets/{form_uid}/data.json"
-            headers = {"Authorization": f"Token {api_token}"}
             try:
-                with st.spinner("📡 Streaming data straight to RAM..."):
-                    response = requests.get(kobo_url, headers=headers, timeout=30)
-                    if response.status_code == 200:
-                        results = response.json().get("results", [])
-                        if results:
-                            st.session_state['kobo_df'] = pd.json_normalize(results)
-                            st.success(f"✅ Loaded {len(results):,} records!")
-                            st.rerun()
-                        else:
-                            st.warning("⚠️ Form contains 0 submissions.")
-                            st.session_state['kobo_df'] = None
+                with st.spinner("📡 Streaming Kobo pages into RAM..."):
+                    results, page_count = fetch_all_kobo_submissions(kobo_server, form_uid, api_token)
+                    if results:
+                        st.session_state['kobo_df'] = pd.json_normalize(results)
+                        st.success(f"✅ Loaded {len(results):,} submissions across {page_count} page(s)!")
+                        st.rerun()
                     else:
-                        st.error(f"❌ API Error {response.status_code}")
+                        st.warning("⚠️ Form contains 0 submissions.")
+                        st.session_state['kobo_df'] = None
             except Exception as e:
                 st.error(f"❌ Unexpected error: {str(e)}")
     
@@ -577,16 +602,30 @@ if df is not None:
         pbi_script = f"""import requests
 import pandas as pd
 import numpy as np
+from urllib.parse import urljoin
 
-# 1. Fetch live data from KoboToolbox API
-url = "{kobo_server}/api/v2/assets/{form_uid}/data.json"
+# 1. Fetch live data from KoboToolbox API with pagination
 headers = {{"Authorization": "Token {api_token}"}}
+url = "{kobo_server}/api/v2/assets/{form_uid}/data.json"
+params = {{"limit": 1000}}
+all_results = []
 
-response = requests.get(url, headers=headers, timeout=45)
-results = response.json().get("results", [])
+while url:
+    response = requests.get(url, headers=headers, params=params, timeout=45)
+    response.raise_for_status()
+    payload = response.json()
+    all_results.extend(payload.get("results", []))
+    next_url = payload.get("next")
+    if not next_url:
+        break
+    if next_url.startswith("/"):
+        url = urljoin("{kobo_server.rstrip('/')}/", next_url.lstrip("/"))
+    else:
+        url = next_url
+    params = None
 
 # 2. Build and flatten the DataFrame
-df = pd.json_normalize(results)
+df = pd.json_normalize(all_results)
 """
         step = 3
         if do_drop_cols and columns_to_drop:

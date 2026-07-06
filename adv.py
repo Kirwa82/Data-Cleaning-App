@@ -34,13 +34,11 @@ if 'selected_sheet' not in st.session_state:
 def make_hashable(df):
     df_safe = df.copy()
     for col in df_safe.columns:
-        sample = df_safe[col].dropna()
-        if len(sample) > 0:
-            first_val = sample.iloc[0]
-            if isinstance(first_val, (list, dict, set)):
-                df_safe[col] = df_safe[col].apply(
-                    lambda x: str(x) if isinstance(x, (list, dict, set)) else x
-                )
+        # Check if ANY value in the column belongs to an unhashable type
+        if df_safe[col].apply(lambda x: isinstance(x, (list, dict, set))).any():
+            df_safe[col] = df_safe[col].apply(
+                lambda x: str(x) if isinstance(x, (list, dict, set)) else x
+            )
     return df_safe
 
 
@@ -260,7 +258,7 @@ else:
     col_btn = st.columns([3, 1])
     with col_btn[1]:
         st.markdown("<br>", unsafe_allow_html=True)
-        connect_db = st.button("🔌 Connect", type="secondary", width="stretch")
+        connect_db = st.button("🔌 Connect", type="secondary", use_container_width=True)
         
     if db_uri and (connect_db or st.session_state.get('db_tables') is not None):
         try:
@@ -282,7 +280,7 @@ else:
             selected_db_table = st.selectbox("🎯 Select Table (Navigator):", options=st.session_state['db_tables'])
         with col4:
             st.markdown("<br>", unsafe_allow_html=True)
-            fetch_db_data = st.button("📥 Load Data", type="primary", width="stretch")
+            fetch_db_data = st.button("📥 Load Data", type="primary", use_container_width=True)
             
         if fetch_db_data:
             try:
@@ -321,6 +319,17 @@ if df is not None:
     cleaned_df = df.copy()
     all_columns = df.columns.tolist()
     
+    # Pre-calculate shape duplicate tracking metrics aggressively
+    try:
+        metric_hash_df = make_hashable(cleaned_df)
+        for c in metric_hash_df.columns:
+            if metric_hash_df[c].dtype == 'object':
+                metric_hash_df[c] = metric_hash_df[c].astype(str).str.strip()
+            metric_hash_df[c] = metric_hash_df[c].replace(['', 'None', 'nan', 'NaN', 'null', 'NULL'], None).fillna("NA_VAL")
+        duplicate_rows = metric_hash_df.duplicated().sum()
+    except Exception:
+        duplicate_rows = "N/A"
+
     # 1. Describing the data
     if show_shape:
         st.write("### Data Dimensions (Shape)")
@@ -329,11 +338,7 @@ if df is not None:
         col2.metric("Current Columns", cleaned_df.shape[1])
         total_missing = cleaned_df.isnull().sum().sum()
         col3.metric("Total Missing Values", f"{total_missing:,}")
-        try:
-            duplicate_rows = make_hashable(cleaned_df).duplicated().sum()
-        except Exception:
-            duplicate_rows = "N/A"
-        col4.metric("Duplicate Rows", f"{duplicate_rows:,}")
+        col4.metric("Duplicate Rows", f"{duplicate_rows}")
 
     # 2. Dropping Columns
     columns_to_drop = []
@@ -359,7 +364,7 @@ if df is not None:
     # 4. Dealing with Data types
     type_mapping_dict = {}
     if do_data_types and remaining_cols_after_drop:
-        st.write("###  Deal with Data Types")
+        st.write("### 🔢 Deal with Data Types")
         with st.expander("Deal with Data Types", expanded=False):
             t_cols = st.columns(3)
             for idx, col in enumerate(remaining_cols_after_drop):
@@ -405,15 +410,31 @@ if df is not None:
                         except Exception as e:
                             st.warning(f"Failed casting `{cur_name}` to {chosen_type}: {e}")
 
-    # 5. Automatic Removal of Duplicates
+    # 5. Automatic Removal of Duplicates (Sanitizes Whitespace and Structural NaNs)
     try:
         before_rows = cleaned_df.shape[0]
-        cleaned_df = cleaned_df[~make_hashable(cleaned_df).duplicated()].reset_index(drop=True)
+        
+        # Build safe structural evaluation space for finding duplicates
+        hashable_df = make_hashable(cleaned_df)
+        
+        for col in hashable_df.columns:
+            # 1. Clean invisible trailing and leading whitespace modifications
+            if hashable_df[col].dtype == 'object':
+                hashable_df[col] = hashable_df[col].astype(str).str.strip()
+            
+            # 2. Standardize all forms of empty spreadsheet items into an identical checkable value
+            hashable_df[col] = hashable_df[col].replace(['', 'None', 'nan', 'NaN', 'null', 'NULL'], None)
+            hashable_df[col] = hashable_df[col].fillna("CLEAN_PIPELINE_MARKER_NULL")
+
+        # Create exact duplicate boolean target arrays and execute filtration
+        duplicate_mask = hashable_df.duplicated()
+        cleaned_df = cleaned_df[~duplicate_mask].reset_index(drop=True)
+        
         removed_duplicates = before_rows - cleaned_df.shape[0]
         if removed_duplicates > 0:
             st.success(f"Removed {removed_duplicates:,} duplicate row(s) from your data.")
-    except:
-        pass
+    except Exception as e:
+        st.sidebar.error(f"Duplicate check failed: {e}")
 
     # 6. Handling Missing Values
     na_strategy = "None"
@@ -460,11 +481,11 @@ if df is not None:
     # 7. Summary Statistics
     if show_describe:
         st.write("### 📊 Summary Statistics")
-        st.dataframe(cleaned_df.describe(), width='stretch')
+        st.dataframe(cleaned_df.describe(), use_container_width=True)
 
     # Output Data Preview Panels
     st.write("### Preview Of Your Data")
-    st.dataframe(cleaned_df.head(15), width='stretch')
+    st.dataframe(cleaned_df.head(15), use_container_width=True)
 
     # =====================================================
     # INTERACTIVE VISUALIZATION WITH PLOTLY
@@ -592,7 +613,7 @@ if df is not None:
                         st.pyplot(fig)
 
     if fig is not None and viz_type != "Word Cloud":
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
 
     # =============================
     # LIVE POWER BI PYTHON SCRIPT

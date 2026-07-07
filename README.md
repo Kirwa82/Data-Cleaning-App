@@ -64,8 +64,6 @@ streamlit run app.py
 
 Your browser will open the app automatically (usually at `http://localhost:8501`).
 
-> Replace `app.py` with the actual filename of the script if it's named differently.
-
 ### 1.4 Deactivating the Environment
 
 When you're done, you can exit the virtual environment with:

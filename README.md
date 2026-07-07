@@ -96,7 +96,7 @@ Switching sources will clear any previously loaded data.
 
 ### Option B: KoboToolbox
 1. Enter your **Form UID** (the unique ID of your Kobo form/asset).
-2. Enter your **API Token** (kept hidden — treated as a password field).
+2. Enter your **API Token** .
 3. Confirm or edit the **KoboToolbox Server URL** (default: `https://kf.kobotoolbox.org`).
 4. Click **"🔄 Pull Live Data from KoboToolbox"**.
 5. The app pages through all submissions automatically and loads them into memory.
@@ -109,7 +109,7 @@ Switching sources will clear any previously loaded data.
    - **SQLite**: just a file path (or `:memory:` for a temporary test database).
    - **PostgreSQL / MySQL**: server, port (optional), database name, username, password.
    - **SQL Server**: choose **Windows Authentication** or **Database Authentication**.
-     - Windows Authentication may not work if the app is hosted on Streamlit Cloud or Linux — use Database Authentication in those cases.
+     - Windows Authentication will not work because the app is hosted on Streamlit Cloud or Linux — use Database Authentication in those cases.
 3. Click **"🔌 Connect"**.
 4. Once connected, pick a table from the **Navigator** dropdown and click **"📥 Load Data"**.
 

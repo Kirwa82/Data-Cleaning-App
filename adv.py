@@ -359,7 +359,7 @@ if df is not None:
                 new_name = r_cols[idx % 2].text_input(f"Original: `{col}`", value="", key=f"ren_{st.session_state.get('sheet_selector', 'default')}_{col}").strip()
                 if new_name:
                     columns_to_rename[col] = new_name
-        cleaned_df = cleaned_df.rename(columns=columns_to_rename)
+            cleaned_df = cleaned_df.rename(columns=columns_to_rename)
 
     # 4. Dealing with Data types
     type_mapping_dict = {}
@@ -410,7 +410,27 @@ if df is not None:
                         except Exception as e:
                             st.warning(f"Failed casting `{cur_name}` to {chosen_type}: {e}")
 
-    # 5. Automatic Removal of Duplicates (Sanitizes Whitespace and Structural NaNs)
+    # =====================================================
+    # 5. REMOVAL OF DUPLICATES (WITH PRIMARY COLUMN FILTER)
+    # =====================================================
+    st.write("### 👥 Duplicate Removal Configuration")
+    dedup_cols_option = st.radio(
+        "Define duplicate evaluation strategy:",
+        ["Entire Row (Match across all columns)", "Primary Key / Distinguishing Column(s)"],
+        horizontal=True,
+        key=f"dedup_choice_{st.session_state.get('sheet_selector', 'default')}"
+    )
+
+    dedup_subset = None
+    if dedup_cols_option == "Primary Key / Distinguishing Column(s)":
+        dedup_subset = st.multiselect(
+            "Choose column(s) to isolate unique records (e.g., unique IDs, submission UUIDs):",
+            options=cleaned_df.columns.tolist(),
+            key=f"dedup_subset_{st.session_state.get('sheet_selector', 'default')}"
+        )
+        if not dedup_subset:
+            st.info("💡 Select one or more columns above. Currently evaluating across the entire row until a selection is made.")
+
     try:
         before_rows = cleaned_df.shape[0]
         
@@ -426,13 +446,17 @@ if df is not None:
             hashable_df[col] = hashable_df[col].replace(['', 'None', 'nan', 'NaN', 'null', 'NULL'], None)
             hashable_df[col] = hashable_df[col].fillna("CLEAN_PIPELINE_MARKER_NULL")
 
-        # Create exact duplicate boolean target arrays and execute filtration
-        duplicate_mask = hashable_df.duplicated()
+        # Execute filtration based on subset layout rules
+        if dedup_subset:
+            duplicate_mask = hashable_df.duplicated(subset=dedup_subset)
+        else:
+            duplicate_mask = hashable_df.duplicated()
+            
         cleaned_df = cleaned_df[~duplicate_mask].reset_index(drop=True)
         
         removed_duplicates = before_rows - cleaned_df.shape[0]
         if removed_duplicates > 0:
-            st.success(f"Removed {removed_duplicates:,} duplicate row(s) from your data.")
+            st.success(f"Removed {removed_duplicates:,} duplicate row(s) from your data model space.")
     except Exception as e:
         st.sidebar.error(f"Duplicate check failed: {e}")
 
@@ -661,7 +685,12 @@ df = pd.json_normalize(all_results)
             pbi_script += f"\n# {step}. Cast Data Types\ntype_rules = {str(type_mapping_dict)}\nfor col, target_type in type_rules.items():\n    if col in df.columns:\n        if target_type == 'String': df[col] = df[col].astype(str)\n        elif target_type == 'Integer': df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)\n        elif target_type == 'Float': df[col] = pd.to_numeric(df[col], errors='coerce')\n        elif target_type == 'DateTime': df[col] = pd.to_datetime(df[col], errors='coerce')\n        elif target_type == 'Boolean': df[col] = df[col].astype(bool)\n"
             step += 1
 
-        pbi_script += f"\n# {step}. Remove duplicate rows safely\ndf_safe = df.copy()\nfor col in df_safe.columns:\n    if len(df_safe[col].dropna()) > 0 and isinstance(df_safe[col].dropna().iloc[0], (list, dict, set)):\n        df_safe[col] = df_safe[col].astype(str)\ndf = df[~df_safe.duplicated()].reset_index(drop=True)\ndel df_safe\n"
+        # Updated duplicate section for Power BI script generation to reflect user input subsetting configuration rules:
+        pbi_script += f"\n# {step}. Remove duplicate rows safely\ndf_safe = df.copy()\nfor col in df_safe.columns:\n    if len(df_safe[col].dropna()) > 0 and isinstance(df_safe[col].dropna().iloc[0], (list, dict, set)):\n        df_safe[col] = df_safe[col].astype(str)\n"
+        if dedup_subset:
+            pbi_script += f"df = df[~df_safe.duplicated(subset={str(dedup_subset)})].reset_index(drop=True)\ndel df_safe\n"
+        else:
+            pbi_script += f"df = df[~df_safe.duplicated()].reset_index(drop=True)\ndel df_safe\n"
         step += 1
 
         if do_missing_values and na_selected_cols:

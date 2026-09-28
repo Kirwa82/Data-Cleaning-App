@@ -682,11 +682,11 @@ df = pd.json_normalize(all_results)
             step += 1
 
         if type_mapping_dict:
-            pbi_script += f"\n# {step}. Cast Data Types\ntype_rules = {str(type_mapping_dict)}\nfor col, target_type in type_rules.items():\n    if col in df.columns:\n        if target_type == 'String': df[col] = df[col].astype(str)\n        elif target_type == 'Integer': df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)\n        elif target_type == 'Float': df[col] = pd.to_numeric(df[col], errors='coerce')\n        elif target_type == 'DateTime': df[col] = pd.to_datetime(df[col], errors='coerce')\n        elif target_type == 'Boolean': df[col] = df[col].astype(bool)\n"
+            pbi_script += f"\n# {step}. Cast Data Types\ntype_rules = {str(type_mapping_dict)}\nfor col, target_type in type_rules.items():\n    if col in df.columns:\n        if target_type == 'String':\n            df[col] = df[col].astype(str)\n        elif target_type == 'Integer':\n            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)\n        elif target_type == 'Float':\n            df[col] = pd.to_numeric(df[col], errors='coerce')\n        elif target_type == 'DateTime':\n            df[col] = pd.to_datetime(df[col], errors='coerce')\n        elif target_type == 'Boolean':\n            df[col] = df[col].astype(bool)\n"
             step += 1
 
         # Updated duplicate section for Power BI script generation to reflect user input subsetting configuration rules:
-        pbi_script += f"\n# {step}. Remove duplicate rows safely\ndf_safe = df.copy()\nfor col in df_safe.columns:\n    if len(df_safe[col].dropna()) > 0 and isinstance(df_safe[col].dropna().iloc[0], (list, dict, set)):\n        df_safe[col] = df_safe[col].astype(str)\n"
+        pbi_script += f"\n# {step}. Remove duplicate rows safely\ndf_safe = df.copy()\nfor col in df_safe.columns:\n    if len(df_safe[col].dropna()) > 0 and isinstance(df_safe[col].dropna().iloc[0], (list, dict, set)):\n        df_safe[col] = df_safe[col].apply(lambda x: str(x) if isinstance(x, (list, dict, set)) else x)\n    if df_safe[col].dtype == 'object':\n        df_safe[col] = df_safe[col].astype(str).str.strip()\n    df_safe[col] = df_safe[col].replace(['', 'None', 'nan', 'NaN', 'null', 'NULL'], None).fillna('CLEAN_PIPELINE_MARKER_NULL')\n"
         if dedup_subset:
             pbi_script += f"df = df[~df_safe.duplicated(subset={str(dedup_subset)})].reset_index(drop=True)\ndel df_safe\n"
         else:
@@ -694,7 +694,7 @@ df = pd.json_normalize(all_results)
         step += 1
 
         if do_missing_values and na_selected_cols:
-            pbi_script += f"\n# {step}. Handle Missing values ({na_strategy})\ntarget_cols = {str(na_selected_cols)}\nfor col in target_cols:\n    if df[col].dtype == 'object':\n        df[col] = df[col].astype(str).str.strip().replace({{ '':'None', 'None':None, 'nan':None, 'NaN':None }})\n"
+            pbi_script += f"\n# {step}. Handle Missing values ({na_strategy})\ntarget_cols = {str(na_selected_cols)}\nfor col in target_cols:\n    if df[col].dtype == 'object':\n        df[col] = df[col].astype(str).str.strip().replace({{'': None, 'None': None, 'nan': None, 'NaN': None}})\n"
             
             if na_strategy == "Drop Rows with Any Missing Data":
                 pbi_script += "df = df.dropna(subset=target_cols)\n"
@@ -714,7 +714,7 @@ df = pd.json_normalize(all_results)
                     pbi_script += "    m = df[col].mode(); df[col] = df[col].fillna(m[0] if not m.empty else '')\n"
             step += 1
 
-        pbi_script += f"\n# {step}. Stringify structural JSON arrays for Power BI compatibility\nfor col in df.columns:\n    if len(df[col].dropna()) > 0 and isinstance(df[col].dropna().iloc[0], (list, dict, set)):\n        df[col] = df[col].astype(str)\n"
+        pbi_script += f"\n# {step}. Stringify structural JSON arrays for Power BI compatibility\nfor col in df.columns:\n    if len(df[col].dropna()) > 0 and isinstance(df[col].dropna().iloc[0], (list, dict, set)):\n        df[col] = df[col].apply(lambda x: str(x) if isinstance(x, (list, dict, set)) else x)\n"
 
         st.markdown("> Copy the Python script block below. Power BI will execute this cleanly without showing `df_safe` artifacts.")
         st.code(pbi_script, language="python")
